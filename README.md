@@ -35,6 +35,14 @@ License: CC BY-NC 4.0
 - Hugging Face Datasets
 - scikit-learn
 
+## Version 2 Features
+
+- Identifies the most repetitive ticket types
+- Calculates queue workload hotspots
+- Estimates potential employee time savings from automation
+- Ranks ticket types by automation potential
+- Suggests automation opportunities such as auto-routing, response templates, and FAQ suggestions
+
 ## Run Locally
 
 ```bash
