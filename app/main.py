@@ -28,10 +28,18 @@ def load_ticket_data(sample_size: int = 5000) -> pd.DataFrame:
     if sample_size and sample_size < len(df):
         df = df.sample(sample_size, random_state=42)
 
-    df = df.dropna(subset=["subject", "body", "priority"])
+    df = df.dropna(subset=["subject", "body", "priority", "queue", "type"])
     df["ticket_text"] = df["subject"].fillna("") + " " + df["body"].fillna("")
 
     return df
+
+
+def estimate_time_savings(ticket_count: int, minutes_saved_per_ticket: int = 5) -> float:
+    """
+    Estimate employee hours saved if repetitive tickets are partially automated.
+    """
+    total_minutes_saved = ticket_count * minutes_saved_per_ticket
+    return round(total_minutes_saved / 60, 2)
 
 
 @st.cache_data
@@ -86,31 +94,11 @@ def create_queue_workload_summary(df: pd.DataFrame) -> pd.DataFrame:
     return summary
 
 
-def estimate_time_savings(ticket_count: int, minutes_saved_per_ticket: int = 5) -> float:
+def build_text_classifier():
     """
-    Estimate employee hours saved if repetitive tickets are partially automated.
+    Build a reusable text classification pipeline.
     """
-    total_minutes_saved = ticket_count * minutes_saved_per_ticket
-    return round(total_minutes_saved / 60, 2)
-
-
-@st.cache_resource
-def train_priority_model(df: pd.DataFrame):
-    """
-    Train a machine learning model to predict ticket priority from ticket text.
-    """
-    X = df["ticket_text"]
-    y = df["priority"]
-
-    X_train, X_test, y_train, y_test = train_test_split(
-        X,
-        y,
-        test_size=0.25,
-        random_state=42,
-        stratify=y
-    )
-
-    model = Pipeline(
+    return Pipeline(
         steps=[
             (
                 "tfidf",
@@ -130,6 +118,24 @@ def train_priority_model(df: pd.DataFrame):
         ]
     )
 
+
+@st.cache_resource
+def train_priority_model(df: pd.DataFrame):
+    """
+    Train a machine learning model to predict ticket priority from ticket text.
+    """
+    X = df["ticket_text"]
+    y = df["priority"]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=0.25,
+        random_state=42,
+        stratify=y
+    )
+
+    model = build_text_classifier()
     model.fit(X_train, y_train)
 
     y_pred = model.predict(X_test)
@@ -148,9 +154,52 @@ def train_priority_model(df: pd.DataFrame):
     return model, accuracy, report, cm, labels
 
 
-def predict_ticket_priority(model, subject: str, body: str):
+@st.cache_resource
+def train_queue_model(df: pd.DataFrame):
     """
-    Predict priority for a custom ticket.
+    Train a machine learning model to predict the correct support queue.
+    """
+    X = df["ticket_text"]
+    y = df["queue"]
+
+    queue_counts = y.value_counts()
+
+    valid_queues = queue_counts[queue_counts >= 10].index
+    filtered_df = df[df["queue"].isin(valid_queues)].copy()
+
+    X = filtered_df["ticket_text"]
+    y = filtered_df["queue"]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=0.25,
+        random_state=42,
+        stratify=y
+    )
+
+    model = build_text_classifier()
+    model.fit(X_train, y_train)
+
+    y_pred = model.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+
+    report = classification_report(
+        y_test,
+        y_pred,
+        output_dict=True,
+        zero_division=0
+    )
+
+    labels = sorted(y.unique().tolist())
+    cm = confusion_matrix(y_test, y_pred, labels=labels)
+
+    return model, accuracy, report, cm, labels, len(filtered_df)
+
+
+def predict_with_confidence(model, subject: str, body: str, label_name: str) -> tuple:
+    """
+    Predict a label and return class confidence scores.
     """
     ticket_text = subject + " " + body
 
@@ -160,7 +209,7 @@ def predict_ticket_priority(model, subject: str, body: str):
 
     confidence_df = pd.DataFrame(
         {
-            "priority": class_labels,
+            label_name: class_labels,
             "confidence": probabilities
         }
     ).sort_values("confidence", ascending=False)
@@ -378,84 +427,195 @@ def main():
     )
 
     with st.spinner("Training priority prediction model..."):
-        model, accuracy, report, cm, labels = train_priority_model(df)
+        priority_model, priority_accuracy, priority_report, priority_cm, priority_labels = train_priority_model(df)
 
     col1, col2 = st.columns(2)
 
     with col1:
-        st.metric("Model Accuracy", f"{accuracy:.2%}")
+        st.metric("Priority Model Accuracy", f"{priority_accuracy:.2%}")
 
     with col2:
         st.metric("Training Rows Used", f"{len(df):,}")
 
-    st.subheader("Model Performance by Priority")
+    st.subheader("Priority Model Performance")
 
-    report_df = (
-        pd.DataFrame(report)
+    priority_report_df = (
+        pd.DataFrame(priority_report)
         .transpose()
         .reset_index()
         .rename(columns={"index": "class"})
     )
 
-    report_df = report_df[
-        report_df["class"].isin(labels)
+    priority_report_df = priority_report_df[
+        priority_report_df["class"].isin(priority_labels)
     ]
 
     st.dataframe(
-        report_df[["class", "precision", "recall", "f1-score", "support"]],
+        priority_report_df[["class", "precision", "recall", "f1-score", "support"]],
         use_container_width=True
     )
 
-    st.subheader("Confusion Matrix")
+    st.subheader("Priority Confusion Matrix")
 
-    cm_df = pd.DataFrame(
-        cm,
-        index=labels,
-        columns=labels
+    priority_cm_df = pd.DataFrame(
+        priority_cm,
+        index=priority_labels,
+        columns=priority_labels
     )
 
-    fig_cm = px.imshow(
-        cm_df,
+    fig_priority_cm = px.imshow(
+        priority_cm_df,
         text_auto=True,
         title="Priority Prediction Confusion Matrix",
         labels=dict(x="Predicted Priority", y="Actual Priority")
     )
-    st.plotly_chart(fig_cm, use_container_width=True)
+    st.plotly_chart(fig_priority_cm, use_container_width=True)
 
-    st.subheader("Try a Custom Ticket")
+    # -----------------------------
+    # Version 4: ML Queue Routing
+    # -----------------------------
+    st.header("Machine Learning: Queue Routing Predictor")
+
+    st.write(
+        """
+        This model predicts which support queue should handle a ticket.
+        This reduces manual triage work by automatically suggesting the right team.
+        """
+    )
+
+    with st.spinner("Training queue routing model..."):
+        queue_model, queue_accuracy, queue_report, queue_cm, queue_labels, queue_training_rows = train_queue_model(df)
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric("Queue Model Accuracy", f"{queue_accuracy:.2%}")
+
+    with col2:
+        st.metric("Queues Learned", f"{len(queue_labels):,}")
+
+    with col3:
+        st.metric("Training Rows Used", f"{queue_training_rows:,}")
+
+    st.subheader("Queue Model Performance")
+
+    queue_report_df = (
+        pd.DataFrame(queue_report)
+        .transpose()
+        .reset_index()
+        .rename(columns={"index": "class"})
+    )
+
+    queue_report_df = queue_report_df[
+        queue_report_df["class"].isin(queue_labels)
+    ]
+
+    st.dataframe(
+        queue_report_df[["class", "precision", "recall", "f1-score", "support"]],
+        use_container_width=True
+    )
+
+    st.subheader("Queue Confusion Matrix")
+
+    st.write(
+        """
+        The queue model may have many labels, so this matrix can be large.
+        Focus on the strongest diagonal values where actual and predicted queues match.
+        """
+    )
+
+    queue_cm_df = pd.DataFrame(
+        queue_cm,
+        index=queue_labels,
+        columns=queue_labels
+    )
+
+    fig_queue_cm = px.imshow(
+        queue_cm_df,
+        text_auto=False,
+        title="Queue Routing Confusion Matrix",
+        labels=dict(x="Predicted Queue", y="Actual Queue")
+    )
+    st.plotly_chart(fig_queue_cm, use_container_width=True)
+
+    # -----------------------------
+    # Combined Triage Demo
+    # -----------------------------
+    st.header("Smart Ticket Triage Demo")
+
+    st.write(
+        """
+        Enter a new support ticket. The app will predict both the priority
+        and the support queue.
+        """
+    )
 
     custom_subject = st.text_input(
         "Ticket subject",
-        value="Unable to access account after password reset"
+        value="Payment system is down for all users"
     )
 
     custom_body = st.text_area(
         "Ticket body",
         value=(
-            "The user reset their password but still cannot log in. "
-            "They need access urgently because they are unable to complete their work."
+            "Customers are unable to complete payments. This is affecting all checkout "
+            "transactions and needs immediate attention."
         ),
         height=150
     )
 
-    if st.button("Predict Priority"):
-        prediction, confidence_df = predict_ticket_priority(
-            model,
+    if st.button("Analyze Ticket"):
+        priority_prediction, priority_confidence_df = predict_with_confidence(
+            priority_model,
             custom_subject,
-            custom_body
+            custom_body,
+            "priority"
         )
 
-        st.success(f"Predicted Priority: {prediction}")
-
-        fig_confidence = px.bar(
-            confidence_df,
-            x="priority",
-            y="confidence",
-            title="Prediction Confidence by Priority"
+        queue_prediction, queue_confidence_df = predict_with_confidence(
+            queue_model,
+            custom_subject,
+            custom_body,
+            "queue"
         )
-        st.plotly_chart(fig_confidence, use_container_width=True)
 
-        st.dataframe(confidence_df, use_container_width=True)
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.success(f"Predicted Priority: {priority_prediction}")
+
+            fig_priority_confidence = px.bar(
+                priority_confidence_df,
+                x="priority",
+                y="confidence",
+                title="Priority Prediction Confidence"
+            )
+            st.plotly_chart(fig_priority_confidence, use_container_width=True)
+
+        with col2:
+            st.success(f"Recommended Queue: {queue_prediction}")
+
+            fig_queue_confidence = px.bar(
+                queue_confidence_df.head(10),
+                x="queue",
+                y="confidence",
+                title="Top Queue Routing Confidence Scores"
+            )
+            st.plotly_chart(fig_queue_confidence, use_container_width=True)
+
+        st.subheader("Agent Recommendation")
+
+        st.write(
+            f"""
+            **Recommended action:** Route this ticket to **{queue_prediction}** with **{priority_prediction}** priority.
+
+            **Why this helps productivity:**
+            - Reduces manual ticket sorting
+            - Speeds up first response time
+            - Helps employees focus on resolution instead of triage
+            - Creates a repeatable process for high-volume support teams
+            """
+        )
 
     # -----------------------------
     # Ticket Explorer
