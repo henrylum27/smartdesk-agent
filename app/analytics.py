@@ -2,7 +2,10 @@ import pandas as pd
 import streamlit as st
 
 
-def estimate_time_savings(ticket_count: int, minutes_saved_per_ticket: int = 5) -> float:
+def estimate_time_savings(
+    ticket_count: int,
+    minutes_saved_per_ticket: int = 5,
+) -> float:
     """
     Estimate employee hours saved if repetitive tickets are partially automated.
     """
@@ -11,7 +14,10 @@ def estimate_time_savings(ticket_count: int, minutes_saved_per_ticket: int = 5) 
 
 
 @st.cache_data
-def create_productivity_summary(df: pd.DataFrame) -> pd.DataFrame:
+def create_productivity_summary(
+    df: pd.DataFrame,
+    minutes_saved_per_ticket: int = 5,
+) -> pd.DataFrame:
     """
     Create a productivity summary by ticket type.
     """
@@ -27,7 +33,7 @@ def create_productivity_summary(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     summary["estimated_hours_saved"] = summary["ticket_count"].apply(
-        lambda x: estimate_time_savings(x)
+        lambda x: estimate_time_savings(x, minutes_saved_per_ticket)
     )
 
     summary["automation_potential"] = pd.cut(
@@ -40,7 +46,10 @@ def create_productivity_summary(df: pd.DataFrame) -> pd.DataFrame:
 
 
 @st.cache_data
-def create_queue_workload_summary(df: pd.DataFrame) -> pd.DataFrame:
+def create_queue_workload_summary(
+    df: pd.DataFrame,
+    minutes_saved_per_ticket: int = 5,
+) -> pd.DataFrame:
     """
     Create workload summary by support queue.
     """
@@ -56,7 +65,7 @@ def create_queue_workload_summary(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     summary["estimated_hours_saved"] = summary["ticket_count"].apply(
-        lambda x: estimate_time_savings(x)
+        lambda x: estimate_time_savings(x, minutes_saved_per_ticket)
     )
 
     return summary

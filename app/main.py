@@ -31,16 +31,72 @@ def main():
         """
     )
 
-    with st.spinner("Loading support ticket dataset..."):
-        df = load_ticket_data()
+    st.sidebar.title("SmartDesk Controls")
 
+    sample_size = st.sidebar.slider(
+        "Dataset sample size",
+        min_value=1000,
+        max_value=10000,
+        value=5000,
+        step=1000,
+    )
+
+    minutes_saved_per_ticket = st.sidebar.slider(
+        "Estimated minutes saved per automated ticket",
+        min_value=1,
+        max_value=20,
+        value=5,
+        step=1,
+    )
+
+    show_dataset_preview = st.sidebar.checkbox("Show dataset preview", value=True)
+    show_distribution = st.sidebar.checkbox("Show ticket distribution", value=True)
+    show_productivity = st.sidebar.checkbox("Show productivity insights", value=True)
+    show_ml_priority = st.sidebar.checkbox("Show priority model", value=True)
+    show_risk_detection = st.sidebar.checkbox("Show suspicious detection", value=True)
+    show_ml_queue = st.sidebar.checkbox("Show queue model", value=True)
+    show_triage_demo = st.sidebar.checkbox("Show smart triage demo", value=True)
+    show_ticket_explorer = st.sidebar.checkbox("Show ticket explorer", value=True)
+
+    with st.spinner("Loading support ticket dataset..."):
+        df = load_ticket_data(sample_size=sample_size)
+
+    st.sidebar.success(f"Loaded {len(df):,} tickets")
     st.success(f"Loaded {len(df):,} tickets")
+    priority_options = ["All"] + sorted(df["priority"].dropna().unique().tolist())
+    selected_priority_filter = st.sidebar.selectbox(
+        "Filter dashboard by priority",
+        options=priority_options,
+    )
+
+    queue_options = ["All"] + sorted(df["queue"].dropna().unique().tolist())
+    selected_queue_filter = st.sidebar.selectbox(
+        "Filter dashboard by queue",
+        options=queue_options,
+    )
+
+    filtered_dashboard_df = df.copy()
+
+    if selected_priority_filter != "All":
+        filtered_dashboard_df = filtered_dashboard_df[
+            filtered_dashboard_df["priority"] == selected_priority_filter
+            ]
+
+    if selected_queue_filter != "All":
+        filtered_dashboard_df = filtered_dashboard_df[
+            filtered_dashboard_df["queue"] == selected_queue_filter
+            ]
+
+    if filtered_dashboard_df.empty:
+        st.warning("No tickets match the selected filters. Showing the full dataset instead.")
+        filtered_dashboard_df = df.copy()
 
     # -----------------------------
     # Dataset Preview
     # -----------------------------
-    st.header("Dataset Preview")
-    st.dataframe(df.head(20), use_container_width=True)
+    if show_dataset_preview:
+        st.header("Dataset Preview")
+        st.dataframe(filtered_dashboard_df.head(20), use_container_width=True)
 
     # -----------------------------
     # Dataset Overview
@@ -50,534 +106,556 @@ def main():
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.metric("Total Tickets", f"{len(df):,}")
+        st.metric("Visible Tickets", f"{len(filtered_dashboard_df):,}")
 
     with col2:
-        st.metric("Ticket Types", df["type"].nunique())
+        st.metric("Ticket Types", filtered_dashboard_df["type"].nunique())
 
     with col3:
-        st.metric("Support Queues", df["queue"].nunique())
+        st.metric("Support Queues", filtered_dashboard_df["queue"].nunique())
 
     with col4:
-        st.metric("Priority Levels", df["priority"].nunique())
+        st.metric("Priority Levels", filtered_dashboard_df["priority"].nunique())
+
 
     # -----------------------------
     # Ticket Distribution
     # -----------------------------
-    st.header("Ticket Distribution")
+    if show_distribution:
+        st.header("Ticket Distribution")
 
-    left_col, right_col = st.columns(2)
+        left_col, right_col = st.columns(2)
 
-    with left_col:
-        type_counts = df["type"].value_counts().reset_index()
-        type_counts.columns = ["type", "count"]
+        with left_col:
+            type_counts = filtered_dashboard_df["type"].value_counts().reset_index()
+            type_counts.columns = ["type", "count"]
 
-        fig_type = px.bar(
-            type_counts,
-            x="type",
-            y="count",
-            title="Tickets by Type",
+            fig_type = px.bar(
+                type_counts,
+                x="type",
+                y="count",
+                title="Tickets by Type",
+            )
+            st.plotly_chart(fig_type, use_container_width=True)
+
+        with right_col:
+            priority_counts = filtered_dashboard_df["priority"].value_counts().reset_index()
+            priority_counts.columns = ["priority", "count"]
+
+            fig_priority = px.bar(
+                priority_counts,
+                x="priority",
+                y="count",
+                title="Tickets by Priority",
+            )
+            st.plotly_chart(fig_priority, use_container_width=True)
+
+        st.header("Top Support Queues")
+
+        queue_counts = filtered_dashboard_df["queue"].value_counts().head(15).reset_index()
+        queue_counts.columns = ["queue", "count"]
+
+        fig_queue = px.bar(
+            queue_counts,
+            x="count",
+            y="queue",
+            orientation="h",
+            title="Top 15 Support Queues",
         )
-        st.plotly_chart(fig_type, use_container_width=True)
-
-    with right_col:
-        priority_counts = df["priority"].value_counts().reset_index()
-        priority_counts.columns = ["priority", "count"]
-
-        fig_priority = px.bar(
-            priority_counts,
-            x="priority",
-            y="count",
-            title="Tickets by Priority",
-        )
-        st.plotly_chart(fig_priority, use_container_width=True)
-
-    st.header("Top Support Queues")
-
-    queue_counts = df["queue"].value_counts().head(15).reset_index()
-    queue_counts.columns = ["queue", "count"]
-
-    fig_queue = px.bar(
-        queue_counts,
-        x="count",
-        y="queue",
-        orientation="h",
-        title="Top 15 Support Queues",
-    )
-    st.plotly_chart(fig_queue, use_container_width=True)
+        st.plotly_chart(fig_queue, use_container_width=True)
 
     # -----------------------------
     # Productivity Insights
     # -----------------------------
-    st.header("Productivity Insights")
+    if show_productivity:
+        st.header("Productivity Insights")
 
-    productivity_df = create_productivity_summary(df)
-    queue_workload_df = create_queue_workload_summary(df)
-
-    top_repetitive_type = productivity_df.iloc[0]
-    top_queue = queue_workload_df.iloc[0]
-    total_estimated_hours_saved = productivity_df["estimated_hours_saved"].sum()
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.metric(
-            "Most Repetitive Ticket Type",
-            top_repetitive_type["type"],
-            f"{top_repetitive_type['ticket_count']:,} tickets",
+        productivity_df = create_productivity_summary(
+            filtered_dashboard_df,
+            minutes_saved_per_ticket=minutes_saved_per_ticket,
         )
 
-    with col2:
-        st.metric(
-            "Highest Workload Queue",
-            top_queue["queue"],
-            f"{top_queue['ticket_count']:,} tickets",
+        queue_workload_df = create_queue_workload_summary(
+            filtered_dashboard_df,
+            minutes_saved_per_ticket=minutes_saved_per_ticket,
         )
 
-    with col3:
-        st.metric(
-            "Estimated Automation Savings",
-            f"{total_estimated_hours_saved:,.1f} hours",
-            "Assuming 5 min saved per ticket",
+        top_repetitive_type = productivity_df.iloc[0]
+        top_queue = queue_workload_df.iloc[0]
+        total_estimated_hours_saved = productivity_df["estimated_hours_saved"].sum()
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.metric(
+                "Most Repetitive Ticket Type",
+                top_repetitive_type["type"],
+                f"{top_repetitive_type['ticket_count']:,} tickets",
+            )
+
+        with col2:
+            st.metric(
+                "Highest Workload Queue",
+                top_queue["queue"],
+                f"{top_queue['ticket_count']:,} tickets",
+            )
+
+        with col3:
+            st.metric(
+                "Estimated Automation Savings",
+                f"{total_estimated_hours_saved:,.1f} hours",
+                "Assuming 5 min saved per ticket",
+            )
+
+        st.subheader("Repetitive Ticket Types")
+
+        fig_repetitive = px.bar(
+            productivity_df.head(10),
+            x="ticket_count",
+            y="type",
+            orientation="h",
+            title="Top 10 Most Repetitive Ticket Types",
+            hover_data=["estimated_hours_saved", "automation_potential"],
+        )
+        st.plotly_chart(fig_repetitive, use_container_width=True)
+
+        st.dataframe(
+            productivity_df[
+                [
+                    "type",
+                    "ticket_count",
+                    "unique_queues",
+                    "priority_levels",
+                    "estimated_hours_saved",
+                    "automation_potential",
+                ]
+            ],
+            use_container_width=True,
         )
 
-    st.subheader("Repetitive Ticket Types")
+        st.subheader("Queue Workload Hotspots")
 
-    fig_repetitive = px.bar(
-        productivity_df.head(10),
-        x="ticket_count",
-        y="type",
-        orientation="h",
-        title="Top 10 Most Repetitive Ticket Types",
-        hover_data=["estimated_hours_saved", "automation_potential"],
-    )
-    st.plotly_chart(fig_repetitive, use_container_width=True)
+        fig_queue_workload = px.bar(
+            queue_workload_df.head(15),
+            x="ticket_count",
+            y="queue",
+            orientation="h",
+            title="Queues With Highest Ticket Workload",
+            hover_data=["estimated_hours_saved", "ticket_types"],
+        )
+        st.plotly_chart(fig_queue_workload, use_container_width=True)
 
-    st.dataframe(
-        productivity_df[
-            [
-                "type",
-                "ticket_count",
-                "unique_queues",
-                "priority_levels",
-                "estimated_hours_saved",
-                "automation_potential",
-            ]
-        ],
-        use_container_width=True,
-    )
+        st.dataframe(
+            queue_workload_df[
+                [
+                    "queue",
+                    "ticket_count",
+                    "ticket_types",
+                    "priority_levels",
+                    "estimated_hours_saved",
+                ]
+            ].head(20),
+            use_container_width=True,
+        )
 
-    st.subheader("Queue Workload Hotspots")
+        st.subheader("Top Automation Opportunities")
 
-    fig_queue_workload = px.bar(
-        queue_workload_df.head(15),
-        x="ticket_count",
-        y="queue",
-        orientation="h",
-        title="Queues With Highest Ticket Workload",
-        hover_data=["estimated_hours_saved", "ticket_types"],
-    )
-    st.plotly_chart(fig_queue_workload, use_container_width=True)
+        automation_opportunities = productivity_df[
+            productivity_df["automation_potential"].isin(["High", "Very High"])
+        ].head(10)
 
-    st.dataframe(
-        queue_workload_df[
-            [
-                "queue",
-                "ticket_count",
-                "ticket_types",
-                "priority_levels",
-                "estimated_hours_saved",
-            ]
-        ].head(20),
-        use_container_width=True,
-    )
+        for _, row in automation_opportunities.iterrows():
+            st.write(
+                f"""
+                **{row['type']}**
+                - Ticket volume: {row['ticket_count']:,}
+                - Estimated time savings: {row['estimated_hours_saved']:,.1f} hours
+                - Automation potential: {row['automation_potential']}
+                - Suggested automation: auto-classification, routing, response templates, and FAQ suggestions
+                """
+            )
 
-    st.subheader("Top Automation Opportunities")
-
-    automation_opportunities = productivity_df[
-        productivity_df["automation_potential"].isin(["High", "Very High"])
-    ].head(10)
-
-    for _, row in automation_opportunities.iterrows():
-        st.write(
-            f"""
-            **{row['type']}**
-            - Ticket volume: {row['ticket_count']:,}
-            - Estimated time savings: {row['estimated_hours_saved']:,.1f} hours
-            - Automation potential: {row['automation_potential']}
-            - Suggested automation: auto-classification, routing, response templates, and FAQ suggestions
+        st.info(
+            """
+            Productivity assumption: this version estimates savings by assuming that automation
+            saves the number of minutes selected in the sidebar per repetitive ticket. Later versions can make this configurable
+            and more realistic by using ticket complexity, priority, and queue.
             """
         )
-
-    st.info(
-        """
-        Productivity assumption: this version estimates savings by assuming that automation
-        saves 5 minutes per repetitive ticket. Later versions can make this configurable
-        and more realistic by using ticket complexity, priority, and queue.
-        """
-    )
 
     # -----------------------------
     # ML Priority Predictor
     # -----------------------------
-    st.header("Machine Learning: Ticket Priority Predictor")
+    if show_ml_priority:
+        st.header("Machine Learning: Ticket Priority Predictor")
 
-    st.write(
-        """
-        This model predicts ticket priority from the subject and body text.
-        It uses TF-IDF text features and logistic regression.
-        """
-    )
-
-    with st.spinner("Training priority prediction model..."):
-        priority_model, priority_accuracy, priority_report, priority_cm, priority_labels = (
-            train_priority_model(df)
+        st.write(
+            """
+            This model predicts ticket priority from the subject and body text.
+            It uses TF-IDF text features and logistic regression.
+            """
         )
 
-    col1, col2 = st.columns(2)
+        with st.spinner("Training priority prediction model..."):
+            priority_model, priority_accuracy, priority_report, priority_cm, priority_labels = (
+                train_priority_model(df)
+            )
 
-    with col1:
-        st.metric("Priority Model Accuracy", f"{priority_accuracy:.2%}")
+        col1, col2 = st.columns(2)
 
-    with col2:
-        st.metric("Training Rows Used", f"{len(df):,}")
+        with col1:
+            st.metric("Priority Model Accuracy", f"{priority_accuracy:.2%}")
 
-    st.subheader("Priority Model Performance")
+        with col2:
+            st.metric("Training Rows Used", f"{len(df):,}")
 
-    priority_report_df = (
-        pd.DataFrame(priority_report)
-        .transpose()
-        .reset_index()
-        .rename(columns={"index": "class"})
-    )
+        st.subheader("Priority Model Performance")
 
-    priority_report_df = priority_report_df[
-        priority_report_df["class"].isin(priority_labels)
-    ]
+        priority_report_df = (
+            pd.DataFrame(priority_report)
+            .transpose()
+            .reset_index()
+            .rename(columns={"index": "class"})
+        )
 
-    st.dataframe(
-        priority_report_df[["class", "precision", "recall", "f1-score", "support"]],
-        use_container_width=True,
-    )
+        priority_report_df = priority_report_df[
+            priority_report_df["class"].isin(priority_labels)
+        ]
 
-    st.subheader("Priority Confusion Matrix")
+        st.dataframe(
+            priority_report_df[["class", "precision", "recall", "f1-score", "support"]],
+            use_container_width=True,
+        )
 
-    priority_cm_df = pd.DataFrame(
-        priority_cm,
-        index=priority_labels,
-        columns=priority_labels,
-    )
+        st.subheader("Priority Confusion Matrix")
 
-    fig_priority_cm = px.imshow(
-        priority_cm_df,
-        text_auto=True,
-        title="Priority Prediction Confusion Matrix",
-        labels=dict(x="Predicted Priority", y="Actual Priority"),
-    )
-    st.plotly_chart(fig_priority_cm, use_container_width=True)
+        priority_cm_df = pd.DataFrame(
+            priority_cm,
+            index=priority_labels,
+            columns=priority_labels,
+        )
+
+        fig_priority_cm = px.imshow(
+            priority_cm_df,
+            text_auto=True,
+            title="Priority Prediction Confusion Matrix",
+            labels=dict(x="Predicted Priority", y="Actual Priority"),
+        )
+        st.plotly_chart(fig_priority_cm, use_container_width=True)
 
     # -----------------------------
     # Suspicious / Adversarial Detection
     # -----------------------------
-    st.header("Suspicious / Adversarial Ticket Detection")
+    if show_risk_detection:
+        st.header("Suspicious / Adversarial Ticket Detection")
 
-    st.write(
-        """
-        This section scans support tickets for suspicious patterns such as phishing,
-        social engineering, credential requests, suspicious links, payment scams,
-        and urgency pressure.
-        """
-    )
-
-    with st.spinner("Scanning tickets for suspicious patterns..."):
-        suspicious_df = create_suspicious_ticket_summary(df.head(1000))
-
-    risk_counts = suspicious_df["risk_level"].value_counts().reset_index()
-    risk_counts.columns = ["risk_level", "count"]
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.metric("Tickets Scanned", f"{len(suspicious_df):,}")
-
-    with col2:
-        high_risk_count = len(suspicious_df[suspicious_df["risk_level"] == "High"])
-        st.metric("High Risk Tickets", f"{high_risk_count:,}")
-
-    with col3:
-        review_count = len(
-            suspicious_df[suspicious_df["risk_level"].isin(["High", "Medium"])]
+        st.write(
+            """
+            This section scans support tickets for suspicious patterns such as phishing,
+            social engineering, credential requests, suspicious links, payment scams,
+            and urgency pressure.
+            """
         )
-        st.metric("Needs Review", f"{review_count:,}")
 
-    fig_risk = px.bar(
-        risk_counts,
-        x="risk_level",
-        y="count",
-        title="Suspicious Risk Levels in Sample Tickets",
-    )
-    st.plotly_chart(fig_risk, use_container_width=True)
+        with st.spinner("Scanning tickets for suspicious patterns..."):
+            suspicious_df = create_suspicious_ticket_summary(df.head(1000))
 
-    st.subheader("Highest Risk Tickets")
+        risk_counts = suspicious_df["risk_level"].value_counts().reset_index()
+        risk_counts.columns = ["risk_level", "count"]
 
-    high_risk_tickets = suspicious_df.sort_values(
-        "risk_score",
-        ascending=False,
-    ).head(20)
+        col1, col2, col3 = st.columns(3)
 
-    st.dataframe(
-        high_risk_tickets[
-            [
-                "subject",
-                "type",
-                "queue",
-                "priority",
-                "risk_score",
-                "risk_level",
-                "detected_categories",
-                "detected_terms",
-            ]
-        ],
-        use_container_width=True,
-    )
+        with col1:
+            st.metric("Tickets Scanned", f"{len(suspicious_df):,}")
 
-    st.info(
-        """
-        This detector is intentionally explainable and rule-based. It is designed
-        as a first safety layer, not a final security decision system.
-        Later versions can add a trained phishing classifier.
-        """
-    )
+        with col2:
+            high_risk_count = len(suspicious_df[suspicious_df["risk_level"] == "High"])
+            st.metric("High Risk Tickets", f"{high_risk_count:,}")
+
+        with col3:
+            review_count = len(
+                suspicious_df[suspicious_df["risk_level"].isin(["High", "Medium"])]
+            )
+            st.metric("Needs Review", f"{review_count:,}")
+
+        fig_risk = px.bar(
+            risk_counts,
+            x="risk_level",
+            y="count",
+            title="Suspicious Risk Levels in Sample Tickets",
+        )
+        st.plotly_chart(fig_risk, use_container_width=True)
+
+        st.subheader("Highest Risk Tickets")
+
+        high_risk_tickets = suspicious_df.sort_values(
+            "risk_score",
+            ascending=False,
+        ).head(20)
+
+        st.dataframe(
+            high_risk_tickets[
+                [
+                    "subject",
+                    "type",
+                    "queue",
+                    "priority",
+                    "risk_score",
+                    "risk_level",
+                    "detected_categories",
+                    "detected_terms",
+                ]
+            ],
+            use_container_width=True,
+        )
+
+        st.info(
+            """
+            This detector is intentionally explainable and rule-based. It is designed
+            as a first safety layer, not a final security decision system.
+            Later versions can add a trained phishing classifier.
+            """
+        )
 
     # -----------------------------
     # ML Queue Routing
     # -----------------------------
-    st.header("Machine Learning: Queue Routing Predictor")
+    if show_ml_queue:
+        st.header("Machine Learning: Queue Routing Predictor")
 
-    st.write(
-        """
-        This model predicts which support queue should handle a ticket.
-        This reduces manual triage work by automatically suggesting the right team.
-        """
-    )
-
-    with st.spinner("Training queue routing model..."):
-        queue_model, queue_accuracy, queue_report, queue_cm, queue_labels, queue_training_rows = (
-            train_queue_model(df)
+        st.write(
+            """
+            This model predicts which support queue should handle a ticket.
+            This reduces manual triage work by automatically suggesting the right team.
+            """
         )
 
-    col1, col2, col3 = st.columns(3)
+        with st.spinner("Training queue routing model..."):
+            queue_model, queue_accuracy, queue_report, queue_cm, queue_labels, queue_training_rows = (
+                train_queue_model(df)
+            )
 
-    with col1:
-        st.metric("Queue Model Accuracy", f"{queue_accuracy:.2%}")
+        col1, col2, col3 = st.columns(3)
 
-    with col2:
-        st.metric("Queues Learned", f"{len(queue_labels):,}")
+        with col1:
+            st.metric("Queue Model Accuracy", f"{queue_accuracy:.2%}")
 
-    with col3:
-        st.metric("Training Rows Used", f"{queue_training_rows:,}")
+        with col2:
+            st.metric("Queues Learned", f"{len(queue_labels):,}")
 
-    st.subheader("Queue Model Performance")
+        with col3:
+            st.metric("Training Rows Used", f"{queue_training_rows:,}")
 
-    queue_report_df = (
-        pd.DataFrame(queue_report)
-        .transpose()
-        .reset_index()
-        .rename(columns={"index": "class"})
-    )
+        st.subheader("Queue Model Performance")
 
-    queue_report_df = queue_report_df[queue_report_df["class"].isin(queue_labels)]
+        queue_report_df = (
+            pd.DataFrame(queue_report)
+            .transpose()
+            .reset_index()
+            .rename(columns={"index": "class"})
+        )
 
-    st.dataframe(
-        queue_report_df[["class", "precision", "recall", "f1-score", "support"]],
-        use_container_width=True,
-    )
+        queue_report_df = queue_report_df[queue_report_df["class"].isin(queue_labels)]
 
-    st.subheader("Queue Confusion Matrix")
+        st.dataframe(
+            queue_report_df[["class", "precision", "recall", "f1-score", "support"]],
+            use_container_width=True,
+        )
 
-    st.write(
-        """
-        The queue model may have many labels, so this matrix can be large.
-        Focus on the strongest diagonal values where actual and predicted queues match.
-        """
-    )
+        st.subheader("Queue Confusion Matrix")
 
-    queue_cm_df = pd.DataFrame(
-        queue_cm,
-        index=queue_labels,
-        columns=queue_labels,
-    )
+        st.write(
+            """
+            The queue model may have many labels, so this matrix can be large.
+            Focus on the strongest diagonal values where actual and predicted queues match.
+            """
+        )
 
-    fig_queue_cm = px.imshow(
-        queue_cm_df,
-        text_auto=False,
-        title="Queue Routing Confusion Matrix",
-        labels=dict(x="Predicted Queue", y="Actual Queue"),
-    )
-    st.plotly_chart(fig_queue_cm, use_container_width=True)
+        queue_cm_df = pd.DataFrame(
+            queue_cm,
+            index=queue_labels,
+            columns=queue_labels,
+        )
+
+        fig_queue_cm = px.imshow(
+            queue_cm_df,
+            text_auto=False,
+            title="Queue Routing Confusion Matrix",
+            labels=dict(x="Predicted Queue", y="Actual Queue"),
+        )
+        st.plotly_chart(fig_queue_cm, use_container_width=True)
+
+    # Make sure models are available for the triage demo
+    if "priority_model" not in locals():
+        priority_model, _, _, _, _ = train_priority_model(df)
+
+    if "queue_model" not in locals():
+        queue_model, _, _, _, _, _ = train_queue_model(df)
 
     # -----------------------------
     # Combined Triage Demo
     # -----------------------------
-    st.header("Smart Ticket Triage Demo")
+    if show_triage_demo:
+        st.header("Smart Ticket Triage Demo")
 
-    st.write(
-        """
-        Enter a new support ticket. The app will predict priority, recommend
-        a support queue, detect suspicious patterns, summarize the issue,
-        and draft a response.
-        """
-    )
-
-    custom_subject = st.text_input(
-        "Ticket subject",
-        value="Payment system is down for all users",
-    )
-
-    custom_body = st.text_area(
-        "Ticket body",
-        value=(
-            "Customers are unable to complete payments. This is affecting all checkout "
-            "transactions and needs immediate attention."
-        ),
-        height=150,
-    )
-
-    if st.button("Analyze Ticket"):
-        priority_prediction, priority_confidence_df = predict_with_confidence(
-            priority_model,
-            custom_subject,
-            custom_body,
-            "priority",
+        st.write(
+            """
+            Enter a new support ticket. The app will predict priority, recommend
+            a support queue, detect suspicious patterns, summarize the issue,
+            and draft a response.
+            """
         )
 
-        queue_prediction, queue_confidence_df = predict_with_confidence(
-            queue_model,
-            custom_subject,
-            custom_body,
-            "queue",
+        custom_subject = st.text_input(
+            "Ticket subject",
+            value="Payment system is down for all users",
         )
 
-        suspicious_result = detect_suspicious_patterns(
-            custom_subject,
-            custom_body,
+        custom_body = st.text_area(
+            "Ticket body",
+            value=(
+                "Customers are unable to complete payments. This is affecting all checkout "
+                "transactions and needs immediate attention."
+            ),
+            height=150,
         )
 
-        ticket_summary = summarize_ticket(
-            custom_subject,
-            custom_body,
-        )
-
-        response_draft = draft_support_response(
-            custom_subject,
-            custom_body,
-            priority_prediction,
-            queue_prediction,
-            suspicious_result,
-            ticket_summary,
-        )
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.success(f"Predicted Priority: {priority_prediction}")
-
-            fig_priority_confidence = px.bar(
-                priority_confidence_df,
-                x="priority",
-                y="confidence",
-                title="Priority Prediction Confidence",
-            )
-            st.plotly_chart(fig_priority_confidence, use_container_width=True)
-
-        with col2:
-            st.success(f"Recommended Queue: {queue_prediction}")
-
-            fig_queue_confidence = px.bar(
-                queue_confidence_df.head(10),
-                x="queue",
-                y="confidence",
-                title="Top Queue Routing Confidence Scores",
-            )
-            st.plotly_chart(fig_queue_confidence, use_container_width=True)
-
-        st.subheader("AI Ticket Summary")
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.write("**Summary:**")
-            st.write(ticket_summary["summary"])
-
-            st.write("**Detected issue type:**")
-            st.write(ticket_summary["issue_type"])
-
-        with col2:
-            st.write("**Customer / business impact:**")
-            st.write(ticket_summary["impact"])
-
-            st.write("**Recommended next step:**")
-            st.write(ticket_summary["recommended_next_step"])
-
-        st.subheader("Suspicious / Adversarial Pattern Detection")
-
-        display_suspicious_detection_result(suspicious_result)
-
-        st.subheader("Agent Recommendation")
-
-        if suspicious_result["risk_level"] in ["High", "Medium"]:
-            st.write(
-                f"""
-                **Recommended action:** Route this ticket to **{queue_prediction}** with **{priority_prediction}** priority,
-                but flag it for additional review because suspicious patterns were detected.
-
-                **Why this matters:**
-                - Reduces manual ticket sorting
-                - Helps employees avoid phishing and social engineering attempts
-                - Prevents suspicious requests from being handled as normal tickets
-                - Supports safer and faster helpdesk operations
-                """
-            )
-        else:
-            st.write(
-                f"""
-                **Recommended action:** Route this ticket to **{queue_prediction}** with **{priority_prediction}** priority.
-
-                **Why this helps productivity:**
-                - Reduces manual ticket sorting
-                - Speeds up first response time
-                - Helps employees focus on resolution instead of triage
-                - Creates a repeatable process for high-volume support teams
-                """
+        if st.button("Analyze Ticket"):
+            priority_prediction, priority_confidence_df = predict_with_confidence(
+                priority_model,
+                custom_subject,
+                custom_body,
+                "priority",
             )
 
-        st.subheader("Draft Support Response")
+            queue_prediction, queue_confidence_df = predict_with_confidence(
+                queue_model,
+                custom_subject,
+                custom_body,
+                "queue",
+            )
 
-        st.text_area(
-            "Generated response draft",
-            value=response_draft.strip(),
-            height=300,
-        )
+            suspicious_result = detect_suspicious_patterns(
+                custom_subject,
+                custom_body,
+            )
+
+            ticket_summary = summarize_ticket(
+                custom_subject,
+                custom_body,
+            )
+
+            response_draft = draft_support_response(
+                custom_subject,
+                custom_body,
+                priority_prediction,
+                queue_prediction,
+                suspicious_result,
+                ticket_summary,
+            )
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.success(f"Predicted Priority: {priority_prediction}")
+
+                fig_priority_confidence = px.bar(
+                    priority_confidence_df,
+                    x="priority",
+                    y="confidence",
+                    title="Priority Prediction Confidence",
+                )
+                st.plotly_chart(fig_priority_confidence, use_container_width=True)
+
+            with col2:
+                st.success(f"Recommended Queue: {queue_prediction}")
+
+                fig_queue_confidence = px.bar(
+                    queue_confidence_df.head(10),
+                    x="queue",
+                    y="confidence",
+                    title="Top Queue Routing Confidence Scores",
+                )
+                st.plotly_chart(fig_queue_confidence, use_container_width=True)
+
+            st.subheader("AI Ticket Summary")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.write("**Summary:**")
+                st.write(ticket_summary["summary"])
+
+                st.write("**Detected issue type:**")
+                st.write(ticket_summary["issue_type"])
+
+            with col2:
+                st.write("**Customer / business impact:**")
+                st.write(ticket_summary["impact"])
+
+                st.write("**Recommended next step:**")
+                st.write(ticket_summary["recommended_next_step"])
+
+            st.subheader("Suspicious / Adversarial Pattern Detection")
+
+            display_suspicious_detection_result(suspicious_result)
+
+            st.subheader("Agent Recommendation")
+
+            if suspicious_result["risk_level"] in ["High", "Medium"]:
+                st.write(
+                    f"""
+                    **Recommended action:** Route this ticket to **{queue_prediction}** with **{priority_prediction}** priority,
+                    but flag it for additional review because suspicious patterns were detected.
+    
+                    **Why this matters:**
+                    - Reduces manual ticket sorting
+                    - Helps employees avoid phishing and social engineering attempts
+                    - Prevents suspicious requests from being handled as normal tickets
+                    - Supports safer and faster helpdesk operations
+                    """
+                )
+            else:
+                st.write(
+                    f"""
+                    **Recommended action:** Route this ticket to **{queue_prediction}** with **{priority_prediction}** priority.
+    
+                    **Why this helps productivity:**
+                    - Reduces manual ticket sorting
+                    - Speeds up first response time
+                    - Helps employees focus on resolution instead of triage
+                    - Creates a repeatable process for high-volume support teams
+                    """
+                )
+
+            st.subheader("Draft Support Response")
+
+            st.text_area(
+                "Generated response draft",
+                value=response_draft.strip(),
+                height=300,
+            )
 
     # -----------------------------
     # Ticket Explorer
     # -----------------------------
-    st.header("Sample Ticket Explorer")
+    if show_ticket_explorer:
+        st.header("Sample Ticket Explorer")
 
-    selected_priority = st.selectbox(
-        "Filter by priority",
-        options=["All"] + sorted(df["priority"].dropna().unique().tolist()),
-    )
+        explorer_priority = st.selectbox(
+            "Explorer priority filter",
+            options=["All"] + sorted(filtered_dashboard_df["priority"].dropna().unique().tolist()),
+        )
 
-    filtered_df = df.copy()
+        explorer_df = filtered_dashboard_df.copy()
 
-    if selected_priority != "All":
-        filtered_df = filtered_df[filtered_df["priority"] == selected_priority]
+        if explorer_priority != "All":
+            explorer_df = explorer_df[explorer_df["priority"] == explorer_priority]
 
-    st.dataframe(
-        filtered_df[["subject", "body", "type", "queue", "priority"]].head(50),
-        use_container_width=True,
-    )
+        st.dataframe(
+            explorer_df[["subject", "body", "type", "queue", "priority"]].head(50),
+            use_container_width=True,
+        )
 
 
 if __name__ == "__main__":
