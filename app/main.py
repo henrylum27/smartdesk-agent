@@ -4,7 +4,12 @@ import streamlit as st
 
 from data_loader import load_ticket_data
 from analytics import create_productivity_summary, create_queue_workload_summary
-from ml_models import train_priority_model, train_queue_model, predict_with_confidence
+from ml_models import (
+    train_priority_model,
+    train_queue_model,
+    predict_with_confidence,
+    delete_saved_models,
+)
 from risk_detector import (
     create_suspicious_ticket_summary,
     detect_suspicious_patterns,
@@ -57,12 +62,32 @@ def main():
     show_ml_queue = st.sidebar.checkbox("Show queue model", value=True)
     show_triage_demo = st.sidebar.checkbox("Show smart triage demo", value=True)
     show_ticket_explorer = st.sidebar.checkbox("Show ticket explorer", value=True)
+    st.sidebar.divider()
+
+    force_retrain_models = st.sidebar.checkbox(
+        "Force retrain models",
+        value=False,
+    )
+
+    if st.sidebar.button("Delete saved models"):
+        deleted_files = delete_saved_models()
+
+        if deleted_files:
+            st.sidebar.success("Deleted saved models.")
+        else:
+            st.sidebar.info("No saved models found.")
 
     with st.spinner("Loading support ticket dataset..."):
         df = load_ticket_data(sample_size=sample_size)
 
     st.sidebar.success(f"Loaded {len(df):,} tickets")
     st.success(f"Loaded {len(df):,} tickets")
+    st.info(
+        """
+        Version 9: Models are now saved to the `models/` folder after training.
+        After the first run, the app can load saved models instead of retraining from scratch.
+        """
+    )
     priority_options = ["All"] + sorted(df["priority"].dropna().unique().tolist())
     selected_priority_filter = st.sidebar.selectbox(
         "Filter dashboard by priority",
@@ -298,7 +323,7 @@ def main():
 
         with st.spinner("Training priority prediction model..."):
             priority_model, priority_accuracy, priority_report, priority_cm, priority_labels = (
-                train_priority_model(df)
+                train_priority_model(df, force_retrain=force_retrain_models)
             )
 
         col1, col2 = st.columns(2)
@@ -432,7 +457,7 @@ def main():
 
         with st.spinner("Training queue routing model..."):
             queue_model, queue_accuracy, queue_report, queue_cm, queue_labels, queue_training_rows = (
-                train_queue_model(df)
+                train_queue_model(df, force_retrain=force_retrain_models)
             )
 
         col1, col2, col3 = st.columns(3)
