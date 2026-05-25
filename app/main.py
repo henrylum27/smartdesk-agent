@@ -3,6 +3,12 @@ import pandas as pd
 import plotly.express as px
 from datasets import load_dataset
 
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+
 
 st.set_page_config(
     page_title="SmartDesk Agent",
@@ -22,17 +28,13 @@ def load_ticket_data(sample_size: int = 5000) -> pd.DataFrame:
     if sample_size and sample_size < len(df):
         df = df.sample(sample_size, random_state=42)
 
+    df = df.dropna(subset=["subject", "body", "priority"])
+    df["ticket_text"] = df["subject"].fillna("") + " " + df["body"].fillna("")
+
     return df
 
 
-def estimate_time_savings(ticket_count: int, minutes_saved_per_ticket: int = 5) -> float:
-    """
-    Estimate employee hours saved if repetitive tickets are partially automated.
-    """
-    total_minutes_saved = ticket_count * minutes_saved_per_ticket
-    return round(total_minutes_saved / 60, 2)
-
-
+@st.cache_data
 def create_productivity_summary(df: pd.DataFrame) -> pd.DataFrame:
     """
     Create a productivity summary by ticket type.
@@ -61,6 +63,7 @@ def create_productivity_summary(df: pd.DataFrame) -> pd.DataFrame:
     return summary
 
 
+@st.cache_data
 def create_queue_workload_summary(df: pd.DataFrame) -> pd.DataFrame:
     """
     Create workload summary by support queue.
@@ -81,6 +84,88 @@ def create_queue_workload_summary(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     return summary
+
+
+def estimate_time_savings(ticket_count: int, minutes_saved_per_ticket: int = 5) -> float:
+    """
+    Estimate employee hours saved if repetitive tickets are partially automated.
+    """
+    total_minutes_saved = ticket_count * minutes_saved_per_ticket
+    return round(total_minutes_saved / 60, 2)
+
+
+@st.cache_resource
+def train_priority_model(df: pd.DataFrame):
+    """
+    Train a machine learning model to predict ticket priority from ticket text.
+    """
+    X = df["ticket_text"]
+    y = df["priority"]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=0.25,
+        random_state=42,
+        stratify=y
+    )
+
+    model = Pipeline(
+        steps=[
+            (
+                "tfidf",
+                TfidfVectorizer(
+                    max_features=5000,
+                    stop_words="english",
+                    ngram_range=(1, 2)
+                )
+            ),
+            (
+                "classifier",
+                LogisticRegression(
+                    max_iter=1000,
+                    class_weight="balanced"
+                )
+            )
+        ]
+    )
+
+    model.fit(X_train, y_train)
+
+    y_pred = model.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+
+    report = classification_report(
+        y_test,
+        y_pred,
+        output_dict=True,
+        zero_division=0
+    )
+
+    labels = sorted(y.unique().tolist())
+    cm = confusion_matrix(y_test, y_pred, labels=labels)
+
+    return model, accuracy, report, cm, labels
+
+
+def predict_ticket_priority(model, subject: str, body: str):
+    """
+    Predict priority for a custom ticket.
+    """
+    ticket_text = subject + " " + body
+
+    prediction = model.predict([ticket_text])[0]
+    probabilities = model.predict_proba([ticket_text])[0]
+    class_labels = model.classes_
+
+    confidence_df = pd.DataFrame(
+        {
+            "priority": class_labels,
+            "confidence": probabilities
+        }
+    ).sort_values("confidence", ascending=False)
+
+    return prediction, confidence_df
 
 
 def main():
@@ -279,6 +364,98 @@ def main():
         and more realistic by using ticket complexity, priority, and queue.
         """
     )
+
+    # -----------------------------
+    # Version 3: ML Priority Predictor
+    # -----------------------------
+    st.header("Machine Learning: Ticket Priority Predictor")
+
+    st.write(
+        """
+        This model predicts ticket priority from the subject and body text.
+        It uses TF-IDF text features and logistic regression.
+        """
+    )
+
+    with st.spinner("Training priority prediction model..."):
+        model, accuracy, report, cm, labels = train_priority_model(df)
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.metric("Model Accuracy", f"{accuracy:.2%}")
+
+    with col2:
+        st.metric("Training Rows Used", f"{len(df):,}")
+
+    st.subheader("Model Performance by Priority")
+
+    report_df = (
+        pd.DataFrame(report)
+        .transpose()
+        .reset_index()
+        .rename(columns={"index": "class"})
+    )
+
+    report_df = report_df[
+        report_df["class"].isin(labels)
+    ]
+
+    st.dataframe(
+        report_df[["class", "precision", "recall", "f1-score", "support"]],
+        use_container_width=True
+    )
+
+    st.subheader("Confusion Matrix")
+
+    cm_df = pd.DataFrame(
+        cm,
+        index=labels,
+        columns=labels
+    )
+
+    fig_cm = px.imshow(
+        cm_df,
+        text_auto=True,
+        title="Priority Prediction Confusion Matrix",
+        labels=dict(x="Predicted Priority", y="Actual Priority")
+    )
+    st.plotly_chart(fig_cm, use_container_width=True)
+
+    st.subheader("Try a Custom Ticket")
+
+    custom_subject = st.text_input(
+        "Ticket subject",
+        value="Unable to access account after password reset"
+    )
+
+    custom_body = st.text_area(
+        "Ticket body",
+        value=(
+            "The user reset their password but still cannot log in. "
+            "They need access urgently because they are unable to complete their work."
+        ),
+        height=150
+    )
+
+    if st.button("Predict Priority"):
+        prediction, confidence_df = predict_ticket_priority(
+            model,
+            custom_subject,
+            custom_body
+        )
+
+        st.success(f"Predicted Priority: {prediction}")
+
+        fig_confidence = px.bar(
+            confidence_df,
+            x="priority",
+            y="confidence",
+            title="Prediction Confidence by Priority"
+        )
+        st.plotly_chart(fig_confidence, use_container_width=True)
+
+        st.dataframe(confidence_df, use_container_width=True)
 
     # -----------------------------
     # Ticket Explorer
