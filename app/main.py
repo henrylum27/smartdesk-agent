@@ -216,7 +216,167 @@ def predict_with_confidence(model, subject: str, body: str, label_name: str) -> 
 
     return prediction, confidence_df
 
+def detect_suspicious_patterns(subject: str, body: str) -> dict:
+    """
+    Detect suspicious or adversarial patterns in a support ticket.
 
+    This is a rule-based detector designed for explainability.
+    It flags phishing, social engineering, urgency pressure,
+    credential requests, payment scams, and suspicious links.
+    """
+    text = f"{subject} {body}".lower()
+
+    suspicious_keywords = {
+        "credential_request": [
+            "password",
+            "login",
+            "credentials",
+            "verify your account",
+            "confirm your account",
+            "security code",
+            "one-time code",
+            "otp",
+            "reset your password"
+        ],
+        "urgency_pressure": [
+            "urgent",
+            "immediately",
+            "as soon as possible",
+            "within 24 hours",
+            "final notice",
+            "act now",
+            "deadline today",
+            "account will be locked"
+        ],
+        "payment_or_invoice": [
+            "invoice",
+            "payment",
+            "bank account",
+            "wire transfer",
+            "billing",
+            "refund",
+            "pay now",
+            "overdue"
+        ],
+        "impersonation": [
+            "ceo",
+            "manager",
+            "director",
+            "executive",
+            "admin team",
+            "it department",
+            "support team"
+        ],
+        "suspicious_links": [
+            "http://",
+            "https://",
+            "bit.ly",
+            "tinyurl",
+            "click here",
+            "open this link",
+            "download attachment"
+        ],
+        "threat_language": [
+            "account suspended",
+            "account locked",
+            "legal action",
+            "unauthorized access",
+            "security breach",
+            "compromised account"
+        ]
+    }
+
+    detected_categories = []
+    detected_terms = []
+
+    for category, keywords in suspicious_keywords.items():
+        matches = [keyword for keyword in keywords if keyword in text]
+
+        if matches:
+            detected_categories.append(category)
+            detected_terms.extend(matches)
+
+    risk_score = min(len(detected_categories) * 20, 100)
+
+    if risk_score >= 70:
+        risk_level = "High"
+    elif risk_score >= 40:
+        risk_level = "Medium"
+    elif risk_score >= 20:
+        risk_level = "Low"
+    else:
+        risk_level = "Minimal"
+
+    recommended_action = {
+        "High": "Do not auto-route only. Escalate to security review before responding.",
+        "Medium": "Route normally but flag for manual review.",
+        "Low": "Allow normal triage but show warning indicators.",
+        "Minimal": "No suspicious pattern detected by the rule-based scanner."
+    }
+
+    return {
+        "risk_score": risk_score,
+        "risk_level": risk_level,
+        "detected_categories": detected_categories,
+        "detected_terms": sorted(set(detected_terms)),
+        "recommended_action": recommended_action[risk_level]
+    }
+
+
+def display_suspicious_detection_result(result: dict):
+    """
+    Display suspicious ticket detection results in Streamlit.
+    """
+    risk_level = result["risk_level"]
+    risk_score = result["risk_score"]
+
+    if risk_level == "High":
+        st.error(f"Suspicious Risk Level: {risk_level} ({risk_score}/100)")
+    elif risk_level == "Medium":
+        st.warning(f"Suspicious Risk Level: {risk_level} ({risk_score}/100)")
+    elif risk_level == "Low":
+        st.info(f"Suspicious Risk Level: {risk_level} ({risk_score}/100)")
+    else:
+        st.success(f"Suspicious Risk Level: {risk_level} ({risk_score}/100)")
+
+    st.write("**Recommended action:**")
+    st.write(result["recommended_action"])
+
+    if result["detected_categories"]:
+        st.write("**Detected suspicious categories:**")
+        st.write(", ".join(result["detected_categories"]))
+
+    if result["detected_terms"]:
+        st.write("**Detected terms:**")
+        st.write(", ".join(result["detected_terms"]))
+
+@st.cache_data
+def create_suspicious_ticket_summary(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Apply the suspicious pattern detector to a sample of tickets.
+    """
+    results = []
+
+    for _, row in df.iterrows():
+        detection = detect_suspicious_patterns(
+            row["subject"],
+            row["body"]
+        )
+
+        results.append(
+            {
+                "subject": row["subject"],
+                "type": row["type"],
+                "queue": row["queue"],
+                "priority": row["priority"],
+                "risk_score": detection["risk_score"],
+                "risk_level": detection["risk_level"],
+                "detected_categories": ", ".join(detection["detected_categories"]),
+                "detected_terms": ", ".join(detection["detected_terms"])
+            }
+        )
+
+    return pd.DataFrame(results)
 def main():
     st.title("SmartDesk Agent")
     st.subheader("AI Helpdesk Ticket Triage and Threat Detection Assistant")
@@ -472,6 +632,88 @@ def main():
     st.plotly_chart(fig_priority_cm, use_container_width=True)
 
     # -----------------------------
+    # Version 5: Suspicious / Adversarial Detection
+    # -----------------------------
+    st.header("Suspicious / Adversarial Ticket Detection")
+
+    st.write(
+        """
+        This section scans support tickets for suspicious patterns such as phishing,
+        social engineering, credential requests, suspicious links, payment scams,
+        and urgency pressure.
+        """
+    )
+
+    with st.spinner("Scanning tickets for suspicious patterns..."):
+        suspicious_df = create_suspicious_ticket_summary(df.head(1000))
+
+    risk_counts = suspicious_df["risk_level"].value_counts().reset_index()
+    risk_counts.columns = ["risk_level", "count"]
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric(
+            "Tickets Scanned",
+            f"{len(suspicious_df):,}"
+        )
+
+    with col2:
+        high_risk_count = len(suspicious_df[suspicious_df["risk_level"] == "High"])
+        st.metric(
+            "High Risk Tickets",
+            f"{high_risk_count:,}"
+        )
+
+    with col3:
+        review_count = len(
+            suspicious_df[suspicious_df["risk_level"].isin(["High", "Medium"])]
+        )
+        st.metric(
+            "Needs Review",
+            f"{review_count:,}"
+        )
+
+    fig_risk = px.bar(
+        risk_counts,
+        x="risk_level",
+        y="count",
+        title="Suspicious Risk Levels in Sample Tickets"
+    )
+    st.plotly_chart(fig_risk, use_container_width=True)
+
+    st.subheader("Highest Risk Tickets")
+
+    high_risk_tickets = suspicious_df.sort_values(
+        "risk_score",
+        ascending=False
+    ).head(20)
+
+    st.dataframe(
+        high_risk_tickets[
+            [
+                "subject",
+                "type",
+                "queue",
+                "priority",
+                "risk_score",
+                "risk_level",
+                "detected_categories",
+                "detected_terms"
+            ]
+        ],
+        use_container_width=True
+    )
+
+    st.info(
+        """
+        This detector is intentionally explainable and rule-based. It is designed
+        as a first safety layer, not a final security decision system.
+        Later versions can add a trained phishing classifier.
+        """
+    )
+
+    # -----------------------------
     # Version 4: ML Queue Routing
     # -----------------------------
     st.header("Machine Learning: Queue Routing Predictor")
@@ -579,6 +821,11 @@ def main():
             "queue"
         )
 
+        suspicious_result = detect_suspicious_patterns(
+            custom_subject,
+            custom_body
+        )
+
         col1, col2 = st.columns(2)
 
         with col1:
@@ -603,19 +850,36 @@ def main():
             )
             st.plotly_chart(fig_queue_confidence, use_container_width=True)
 
+        st.subheader("Suspicious / Adversarial Pattern Detection")
+
+        display_suspicious_detection_result(suspicious_result)
         st.subheader("Agent Recommendation")
 
-        st.write(
-            f"""
-            **Recommended action:** Route this ticket to **{queue_prediction}** with **{priority_prediction}** priority.
+        if suspicious_result["risk_level"] in ["High", "Medium"]:
+            st.write(
+                f"""
+                **Recommended action:** Route this ticket to **{queue_prediction}** with **{priority_prediction}** priority,
+                but flag it for additional review because suspicious patterns were detected.
 
-            **Why this helps productivity:**
-            - Reduces manual ticket sorting
-            - Speeds up first response time
-            - Helps employees focus on resolution instead of triage
-            - Creates a repeatable process for high-volume support teams
-            """
-        )
+                **Why this matters:**
+                - Reduces manual ticket sorting
+                - Helps employees avoid phishing and social engineering attempts
+                - Prevents suspicious requests from being handled as normal tickets
+                - Supports safer and faster helpdesk operations
+                """
+            )
+        else:
+            st.write(
+                f"""
+                **Recommended action:** Route this ticket to **{queue_prediction}** with **{priority_prediction}** priority.
+
+                **Why this helps productivity:**
+                - Reduces manual ticket sorting
+                - Speeds up first response time
+                - Helps employees focus on resolution instead of triage
+                - Creates a repeatable process for high-volume support teams
+                """
+            )
 
     # -----------------------------
     # Ticket Explorer
